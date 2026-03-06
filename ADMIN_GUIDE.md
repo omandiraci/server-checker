@@ -1,44 +1,47 @@
-# 🛠 Administrative Guide - PreScaler Server Monitor
+# 🛠 Administrative Guide - Server Checker
 
 ## İlk Kurulum Adımları
 
 ### 1. Projeyi Klonla ve Bağımlılıkları Kur
 
 ```bash
-cd ~/Desktop/Projects
-git clone <repo-url> server-monitor
-cd server-monitor
+git clone https://github.com/omandiraci/server-checker.git
+cd server-checker
 python3 -m venv .venv
 source .venv/bin/activate
 pip install rich
 ```
 
-### 2. SSH Erişimini Doğrula
+### 2. Yapılandırma
 
 ```bash
-ssh prescaler "uptime"
+cp .env.example .env
 ```
 
-Bu komut sunucunun uptime bilgisini döndürmelidir. Hata alıyorsanız `~/.ssh/config` dosyanızı kontrol edin.
+`.env` dosyasını kendi bilgilerinizle düzenleyin:
 
-### 3. IP Adreslerini Yapılandır
-
-`monitor.py` dosyasında `ALLOWED_IPS` listesini güncelleyin:
-
-```python
-ALLOWED_IPS = ["185.139.196.1", "34.240.218.44"]
+```env
+ALLOWED_IPS=<ofis-ip>,<vpn-ip>
+SSH_HOST=<ssh-config-host-adı>
+MAX_LOG_DAYS=30
 ```
 
-Yeni bir ofis veya VPN IP'si eklemek için bu listeye ekleme yapın.
+### 3. SSH Erişimini Doğrula
+
+```bash
+ssh <ssh-host> "uptime"
+```
+
+Bu komut sunucunun uptime bilgisini döndürmelidir.
 
 ### 4. Cron Job'ları Kur
 
 ```bash
-VENV_PY="$HOME/Desktop/Projects/server-monitor/.venv/bin/python3"
-SCRIPT="$HOME/Desktop/Projects/server-monitor/monitor.py"
-LOGF="$HOME/Desktop/Projects/server-monitor/logs/cron.log"
+VENV_PY="$HOME/path/to/server-checker/.venv/bin/python3"
+SCRIPT="$HOME/path/to/server-checker/monitor.py"
+LOGF="$HOME/path/to/server-checker/logs/cron.log"
 
-(crontab -l 2>/dev/null | grep -v "server-monitor"; \
+(crontab -l 2>/dev/null | grep -v "server-checker"; \
 echo "0 * * * * $VENV_PY $SCRIPT check >> $LOGF 2>&1"; \
 echo "0 18 * * * $VENV_PY $SCRIPT summary >> $LOGF 2>&1") | crontab -
 ```
@@ -46,13 +49,13 @@ echo "0 18 * * * $VENV_PY $SCRIPT summary >> $LOGF 2>&1") | crontab -
 Doğrulama:
 
 ```bash
-crontab -l | grep server-monitor
+crontab -l | grep server-checker
 ```
 
 ### 5. Shell Alias Ekle
 
 ```bash
-echo "alias monitor='~/Desktop/Projects/server-monitor/.venv/bin/python3 ~/Desktop/Projects/server-monitor/monitor.py'" >> ~/.zshrc
+echo "alias monitor='~/path/to/server-checker/.venv/bin/python3 ~/path/to/server-checker/monitor.py'" >> ~/.zshrc
 source ~/.zshrc
 ```
 
@@ -78,7 +81,6 @@ monitor logs 100    # Son 100 kayıt
 Her log kaydı şunları içerir:
 - Zaman damgası
 - Durum (UP / DOWN / SKIP)
-- Public IP adresi
 - SSH yanıt süresi (latency)
 - Sunucu çıktısı (uptime, disk, memory)
 
@@ -94,48 +96,38 @@ Son 14 günün tablosunu gösterir ve macOS bildirimi gönderir.
 
 ## Sorun Giderme
 
-### "SKIP - IP eşleşmedi" Logu
+### "SKIP - IP eşleşmedi"
 
-VPN veya ofis ağına bağlı değilsiniz. Bu normal bir durumdur, kontrol atlanır.
+İzin verilen ağda değilsiniz.
 
-**Çözüm:** VPN'e bağlanın veya yeni IP'yi `ALLOWED_IPS` listesine ekleyin.
+**Çözüm:** VPN'e bağlanın veya `.env` dosyasındaki `ALLOWED_IPS`'e yeni IP ekleyin.
 
-### "SKIP - Public IP alınamadı" Logu
+### "SKIP - Public IP alınamadı"
 
 İnternet bağlantısı yok veya `api.ipify.org` erişilemez.
 
-**Çözüm:** İnternet bağlantınızı kontrol edin.
-
-### "DOWN - SSH zaman aşımı" Logu
+### "DOWN - SSH zaman aşımı"
 
 Sunucu erişilemez veya SSH portu kapalı.
 
-**Kontrol adımları:**
+**Kontrol:**
 ```bash
-# SSH bağlantısını manuel test et
-ssh -v prescaler "uptime"
-
-# Sunucu IP'sine ping at
-ping -c 3 <sunucu-ip>
+ssh -v <ssh-host> "uptime"
 ```
 
 ### Cron Çalışmıyor
 
 ```bash
 # Cron logunu kontrol et
-cat ~/Desktop/Projects/server-monitor/logs/cron.log
-
-# Cron job'ların listesi
-crontab -l
+cat /path/to/server-checker/logs/cron.log
 
 # macOS'ta cron izni gerekebilir:
-# Sistem Ayarları → Gizlilik ve Güvenlik → Tam Disk Erişimi → cron ekle
+# Sistem Ayarları → Gizlilik ve Güvenlik → Tam Disk Erişimi → cron
 ```
 
 ### macOS Bildirimleri Gelmiyor
 
 ```bash
-# Bildirimi manuel test et
 osascript -e 'display notification "Test" with title "Monitor" sound name "default"'
 ```
 
@@ -145,50 +137,35 @@ Bildirim gelmiyorsa: **Sistem Ayarları → Bildirimler → Script Editor** bild
 
 ## Bakım
 
-### Log Rotation
-
-Loglar otomatik olarak 30 gün sonra temizlenir. Bu süreyi değiştirmek için:
-
-```python
-MAX_LOG_DAYS = 30  # İstediğiniz gün sayısı
-```
-
 ### Manuel Log Temizliği
 
 ```bash
-# Tüm logları sil
-rm ~/Desktop/Projects/server-monitor/logs/*.jsonl
-rm ~/Desktop/Projects/server-monitor/logs/daily_summary.json
-
-# Cron logunu sil
-> ~/Desktop/Projects/server-monitor/logs/cron.log
+rm /path/to/server-checker/logs/*.jsonl
+rm /path/to/server-checker/logs/daily_summary.json
 ```
 
 ### Cron Job'ları Kaldırma
 
 ```bash
-crontab -l | grep -v "server-monitor" | crontab -
+crontab -l | grep -v "server-checker" | crontab -
 ```
 
 ### Kontrol Sıklığını Değiştirme
-
-```bash
-crontab -e
-```
 
 ```cron
 # Her 30 dakikada bir
 */30 * * * * /path/to/monitor.py check
 
-# Her 2 saatte bir
-0 */2 * * * /path/to/monitor.py check
-
-# Sadece mesai saatlerinde (09-18)
+# Sadece mesai saatlerinde (09-18, Pzt-Cum)
 0 9-18 * * 1-5 /path/to/monitor.py check
 ```
 
-### Yeni Sunucu Ekleme
+---
 
-1. `~/.ssh/config` dosyasına yeni host ekleyin
-2. `monitor.py` dosyasını kopyalayıp `SSH_HOST` değerini değiştirin
-3. Yeni bir cron job ekleyin
+## Güvenlik Notları
+
+- `.env` dosyası repoya dahil edilmez (`.gitignore`'da)
+- IP adresleri ve SSH host bilgileri sadece `.env` dosyasında tutulur
+- `monitor status` komutu IP adresini maskeleyerek gösterir
+- SSH bağlantısı mevcut `~/.ssh/config` yapılandırmasını kullanır
+- Log dosyaları otomatik olarak belirtilen süre sonunda temizlenir

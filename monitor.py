@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreScaler Sunucu Monitör"""
+"""Server Checker - SSH health check + macOS bildirim"""
 
 import subprocess
 import datetime
@@ -14,14 +14,36 @@ from rich.panel import Panel
 from rich.text import Text
 from rich import box
 
-# Ayarlar
-ALLOWED_IPS = ["185.139.196.1", "34.240.218.44"]
-SSH_HOST = "prescaler"
+# .env dosyasından ayarları oku
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "monitor.jsonl")
 DAILY_FILE = os.path.join(LOG_DIR, "daily_summary.json")
-MAX_LOG_DAYS = 30
+
+
+def load_env():
+    env_path = os.path.join(BASE_DIR, ".env")
+    if not os.path.exists(env_path):
+        print("HATA: .env dosyası bulunamadı. .env.example dosyasını kopyalayıp düzenleyin.")
+        sys.exit(1)
+    config = {}
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                config[k.strip()] = v.strip()
+    return config
+
+
+ENV = load_env()
+ALLOWED_IPS = [ip.strip() for ip in ENV.get("ALLOWED_IPS", "").split(",") if ip.strip()]
+SSH_HOST = ENV.get("SSH_HOST", "")
+MAX_LOG_DAYS = int(ENV.get("MAX_LOG_DAYS", "30"))
+
+if not ALLOWED_IPS or not SSH_HOST:
+    print("HATA: .env dosyasında ALLOWED_IPS ve SSH_HOST tanımlı olmalı.")
+    sys.exit(1)
 
 console = Console()
 
@@ -94,7 +116,6 @@ def read_logs(days=None, limit=None):
 
 
 def rotate_logs():
-    """30 günden eski logları sil"""
     if not os.path.exists(LOG_FILE):
         return
     cutoff = (datetime.datetime.now() - datetime.timedelta(days=MAX_LOG_DAYS)).isoformat()
@@ -129,7 +150,6 @@ def update_daily(status):
 # ─── Ana Komutlar ───
 
 def cmd_check():
-    """Saatlik kontrol"""
     now = datetime.datetime.now().isoformat(timespec="seconds")
     entry = {"time": now, "status": "", "ip": "", "output": "", "latency": 0}
 
@@ -146,10 +166,10 @@ def cmd_check():
 
     if not ip_matches(my_ip):
         entry["status"] = "skip"
-        entry["output"] = f"IP eşleşmedi ({my_ip})"
+        entry["output"] = f"IP eşleşmedi"
         write_log(entry)
         update_daily("skip")
-        print(f"[{now}] SKIP - IP eşleşmedi ({my_ip})")
+        print(f"[{now}] SKIP - IP eşleşmedi")
         return
 
     ok, output, latency = ssh_health_check()
@@ -163,7 +183,7 @@ def cmd_check():
     else:
         entry["status"] = "down"
         update_daily("down")
-        notify("⚠️ PreScaler DOWN", f"Sunucu erişilemez: {output[:80]}")
+        notify("⚠️ Server DOWN", f"Sunucu erişilemez: {output[:80]}")
         print(f"[{now}] DOWN ✗ - {output}")
 
     write_log(entry)
@@ -171,7 +191,6 @@ def cmd_check():
 
 
 def cmd_summary():
-    """Günlük özet bildirimi + terminalde göster"""
     data = {}
     if os.path.exists(DAILY_FILE):
         with open(DAILY_FILE) as f:
@@ -181,7 +200,7 @@ def cmd_summary():
         console.print("[yellow]Henüz veri yok.[/yellow]")
         return
 
-    table = Table(title="📊 PreScaler Sunucu Monitör - Günlük Özet", box=box.ROUNDED, show_lines=True)
+    table = Table(title="📊 Server Checker - Günlük Özet", box=box.ROUNDED, show_lines=True)
     table.add_column("Tarih", style="cyan", justify="center")
     table.add_column("Toplam", justify="center")
     table.add_column("✅ UP", style="green", justify="center")
@@ -201,17 +220,15 @@ def cmd_summary():
 
     console.print(table)
 
-    # macOS bildirimi
     today = datetime.date.today().isoformat()
     if today in data:
         s = data[today]
         emoji = "🟢" if s["down"] == 0 and s["up"] > 0 else "🔴" if s["down"] > 0 else "⚪"
         msg = f"{emoji} UP:{s['up']} DOWN:{s['down']} SKIP:{s['skip']} / Toplam:{s['total']}"
-        notify("PreScaler Günlük Rapor", msg)
+        notify("Server Checker Günlük Rapor", msg)
 
 
 def cmd_logs(limit=20):
-    """Son kontrolleri göster"""
     logs = read_logs(limit=limit)
     if not logs:
         console.print("[yellow]Henüz log yok.[/yellow]")
@@ -220,12 +237,10 @@ def cmd_logs(limit=20):
     table = Table(title="📋 Son Kontroller", box=box.ROUNDED, show_lines=True)
     table.add_column("Zaman", style="cyan", width=20)
     table.add_column("Durum", justify="center", width=8)
-    table.add_column("IP", width=16)
     table.add_column("Latency", justify="right", width=8)
-    table.add_column("Detay", max_width=60)
+    table.add_column("Detay", max_width=70)
 
     for e in logs:
-        t = e.get("time", "?")
         s = e.get("status", "?")
         if s == "up":
             status = Text("✅ UP", style="bold green")
@@ -235,14 +250,13 @@ def cmd_logs(limit=20):
             status = Text("⏭ SKIP", style="yellow")
 
         lat = f"{e.get('latency', 0)}s" if e.get("latency") else "-"
-        output = e.get("output", "")[:60]
-        table.add_row(t, status, e.get("ip", ""), lat, output)
+        output = e.get("output", "")[:70]
+        table.add_row(e.get("time", "?"), status, lat, output)
 
     console.print(table)
 
 
 def cmd_status():
-    """Anlık durum kontrolü"""
     console.print(Panel("🔍 Anlık Durum Kontrolü", style="bold blue"))
 
     my_ip = get_public_ip()
@@ -251,7 +265,8 @@ def cmd_status():
         return
 
     ip_ok = ip_matches(my_ip)
-    console.print(f"  IP Adresi: [cyan]{my_ip}[/cyan]  {'[green]✓ Eşleşti[/green]' if ip_ok else '[red]✗ Eşleşmedi[/red]'}")
+    ip_display = f"{my_ip[:3]}.***.***{my_ip[-3:]}" if len(my_ip) > 6 else my_ip
+    console.print(f"  IP: [cyan]{ip_display}[/cyan]  {'[green]✓ Eşleşti[/green]' if ip_ok else '[red]✗ Eşleşmedi[/red]'}")
 
     if not ip_ok:
         console.print("[yellow]  VPN veya ofis ağına bağlanın.[/yellow]")
@@ -277,7 +292,7 @@ def cmd_help():
     table.add_row("status", "Anlık durum kontrolü")
     table.add_row("summary", "Günlük özet tablosu + bildirim")
     table.add_row("logs [N]", "Son N kontrolü göster (varsayılan: 20)")
-    console.print(Panel(table, title="🖥  PreScaler Monitör", subtitle="Kullanım: monitor.py <komut>"))
+    console.print(Panel(table, title="🖥  Server Checker", subtitle="Kullanım: monitor.py <komut>"))
 
 
 if __name__ == "__main__":
